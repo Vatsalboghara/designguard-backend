@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 const db = require('./config/db');
 const { initializeSocket } = require('./config/socket');
@@ -16,28 +18,52 @@ const io = initializeSocket(server);
 app.use(express.json());
 app.use(cors());
 
-//test bd connection and check schema
-db.pool.query('SELECT NOW()', (err, res) => {
+// Auto-migration function
+async function ensureDatabaseSchema() {
+    const client = await db.pool.connect();
+    try {
+        console.log('🔍 Checking database schema...');
+        
+        // Check if users table has password_hash column
+        const result = await client.query(`
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'users' AND column_name = 'password_hash'
+        `);
+        
+        if (result.rows.length === 0) {
+            console.log('⚠️  password_hash column not found, running migration...');
+            
+            // Read and execute schema file
+            const schemaPath = path.join(__dirname, '../database_schema.sql');
+            if (fs.existsSync(schemaPath)) {
+                const schema = fs.readFileSync(schemaPath, 'utf8');
+                await client.query(schema);
+                console.log('✅ Database migration completed successfully!');
+            } else {
+                console.warn('⚠️  Schema file not found, skipping migration');
+            }
+        } else {
+            console.log('✅ Database schema is up to date');
+        }
+        
+    } catch (error) {
+        console.error('❌ Migration error:', error.message);
+        // Don't fail the server startup, just log the error
+    } finally {
+        client.release();
+    }
+}
+
+//test bd connection and run migration
+db.pool.query('SELECT NOW()', async (err, res) => {
     if (err) {
         console.error('Database Connection Failed:', err);
     } else {
         console.log('Database Connected Successfully');
         
-        // Check if users table has password_hash column
-        db.pool.query(`
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_name = 'users' AND column_name = 'password_hash'
-        `, (err, result) => {
-            if (err) {
-                console.error('Schema check failed:', err);
-            } else if (result.rows.length === 0) {
-                console.warn('⚠️  WARNING: password_hash column not found in users table');
-                console.warn('   Please run: npm run migrate');
-            } else {
-                console.log('✅ Database schema is up to date');
-            }
-        });
+        // Run migration check
+        await ensureDatabaseSchema();
     }
 });
 
