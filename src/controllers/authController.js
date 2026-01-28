@@ -90,6 +90,8 @@ exports.register = async (req, res) => {
   } catch (error) {
     await client.query("ROLLBACK");
     console.error(error);
+    console.log(error);
+    
     res.status(500).json({ message: "Server Error" });
   } finally {
     client.release();
