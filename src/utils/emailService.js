@@ -6,7 +6,7 @@ const { google } = require("googleapis");
 const oAuth2Client = new google.auth.OAuth2(
   process.env.CLIENT_ID,
   process.env.CLIENT_SECRET,
-  "http://localhost"
+  "https://developers.google.com/oauthplayground"
 );
 
 // Set refresh token
