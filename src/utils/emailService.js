@@ -19,6 +19,8 @@ const testEmailConfig = async () => {
         console.log('✅ Email service is ready');
         return true;
     } catch (error) {
+        console.log(error);
+        
         console.error('❌ Email service configuration error:', error.message);
         return false;
     }
