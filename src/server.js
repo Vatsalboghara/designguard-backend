@@ -16,12 +16,28 @@ const io = initializeSocket(server);
 app.use(express.json());
 app.use(cors());
 
-//test bd connection
+//test bd connection and check schema
 db.pool.query('SELECT NOW()', (err, res) => {
     if (err) {
         console.error('Database Connection Failed:', err);
     } else {
         console.log('Database Connected Successfully');
+        
+        // Check if users table has password_hash column
+        db.pool.query(`
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'users' AND column_name = 'password_hash'
+        `, (err, result) => {
+            if (err) {
+                console.error('Schema check failed:', err);
+            } else if (result.rows.length === 0) {
+                console.warn('⚠️  WARNING: password_hash column not found in users table');
+                console.warn('   Please run: npm run migrate');
+            } else {
+                console.log('✅ Database schema is up to date');
+            }
+        });
     }
 });
 

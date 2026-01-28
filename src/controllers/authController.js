@@ -48,21 +48,44 @@ exports.register = async (req, res) => {
 
     await client.query("BEGIN");
 
-    //insert user
-    const insertUserQuery = `INSERT INTO users (full_name, email, password_hash, mobile_number, role, otp_code, otp_expires_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id`;
-
-    const userResult = await client.query(insertUserQuery, [
-      full_name,
-      email,
-      password_hash,
-      mobile_number,
-      role,
-      otp_code,
-      otp_expires_at,
-    ]);
-    const userId = userResult.rows[0].id;
+    // Check if password_hash column exists, fallback to password column
+    let insertUserQuery;
+    let queryParams;
+    let userId;
+    
+    try {
+      // Try with password_hash column first
+      insertUserQuery = `INSERT INTO users (full_name, email, password_hash, mobile_number, role, otp_code, otp_expires_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          RETURNING id`;
+      
+      queryParams = [
+        full_name,
+        email,
+        password_hash,
+        mobile_number,
+        role,
+        otp_code,
+        otp_expires_at,
+      ];
+      
+      const userResult = await client.query(insertUserQuery, queryParams);
+      userId = userResult.rows[0].id;
+      
+    } catch (err) {
+      // If password_hash column doesn't exist, try password column
+      if (err.code === '42703') {
+        console.log('password_hash column not found, using password column');
+        insertUserQuery = `INSERT INTO users (full_name, email, password, mobile_number, role, otp_code, otp_expires_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id`;
+        
+        const userResult = await client.query(insertUserQuery, queryParams);
+        userId = userResult.rows[0].id;
+      } else {
+        throw err;
+      }
+    }
 
     //insert profile based on role
     if (role === "factory_owner") {
@@ -161,7 +184,13 @@ exports.login = async (req, res) => {
         .status(403)
         .json({ message: "Please verify your email first." });
     }
-    const isMatch = await bcrypt.compare(password, user.password_hash);
+    // Check password using password_hash column or fallback to password column
+    const passwordToCheck = user.password_hash || user.password;
+    if (!passwordToCheck) {
+      return res.status(500).json({ message: "Password data not found" });
+    }
+    
+    const isMatch = await bcrypt.compare(password, passwordToCheck);
     if (!isMatch) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
@@ -233,8 +262,24 @@ exports.resetPassword = async (req, res) => {
       const userId = decoded.user.id;
       const salt = await bcrypt.genSalt(10);
       const password_hash = await bcrypt.hash(newPassword, salt);
-      await db.query("UPDATE users SET password_hash = $1 WHERE id = $2", [
-        password_hash,
+      
+      // Try to update password_hash column, fallback to password column
+      try {
+        await db.query("UPDATE users SET password_hash = $1 WHERE id = $2", [
+          password_hash,
+          userId,
+        ]);
+      } catch (err) {
+        // If password_hash column doesn't exist, try password column
+        if (err.code === '42703') {
+          await db.query("UPDATE users SET password = $1 WHERE id = $2", [
+            password_hash,
+            userId,
+          ]);
+        } else {
+          throw err;
+        }
+      }
         userId,
       ]);
       res

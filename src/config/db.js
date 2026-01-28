@@ -1,7 +1,5 @@
 require('dotenv').config();
 const { Pool } = require('pg');
-
-// Check: શું આપણે Render પર છીએ? (જો DATABASE_URL હોય તો)
 const isProduction = process.env.NODE_ENV === 'production' || process.env.DATABASE_URL;
 
 let poolConfig;
