@@ -7,15 +7,15 @@ let io;
 const initializeSocket = (server) => {
     io = new Server(server, {
         cors: {
-            origin: "*", // In production, specify your frontend URL
+            origin: "*", 
             methods: ["GET", "POST"]
         },
         // Add these options to handle payload issues
-        maxHttpBufferSize: 1e6, // 1MB
+        maxHttpBufferSize: 1e6, 
         pingTimeout: 60000,
         pingInterval: 25000,
         upgradeTimeout: 30000,
-        allowEIO3: true // Allow Engine.IO v3 clients
+        allowEIO3: true 
     });
 
     // Socket authentication middleware

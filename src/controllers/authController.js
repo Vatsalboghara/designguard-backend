@@ -81,6 +81,8 @@ exports.register = async (req, res) => {
             RETURNING id`;
         
         const userResult = await client.query(insertUserQuery, queryParams);
+        console.log("line 85 auth js", userResult);
+        
         userId = userResult.rows[0].id;
       } else {
         throw err;
@@ -116,11 +118,33 @@ exports.register = async (req, res) => {
 
     await client.query("COMMIT");
 
-    //send otp email
-    await sendOTP(email, otp_code);
+    // Send OTP email (with error handling)
+    try {
+      await sendOTP(email, otp_code);
+      console.log(`✅ OTP sent successfully to ${email}`);
+    } catch (emailError) {
+      console.error('❌ Email sending failed:', emailError.message);
+      
+      // For development/testing - auto-verify user if email fails
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('🔧 Development mode: Auto-verifying user due to email failure');
+        await client.query(
+          "UPDATE users SET is_verified = TRUE, otp_code = NULL, otp_expires_at = NULL WHERE id = $1",
+          [userId]
+        );
+        return res.status(201).json({
+          message: "User registered and auto-verified (email service unavailable)",
+          userId,
+          autoVerified: true
+        });
+      }
+      
+      // In production, still fail if email can't be sent
+      throw emailError;
+    }
+
     res.status(201).json({
-      message:
-        "User registered successfully. Please verify your email via OTP.",
+      message: "User registered successfully. Please verify your email via OTP.",
       userId,
     });
   } catch (error) {
@@ -179,10 +203,23 @@ exports.login = async (req, res) => {
       return res.status(400).json({ message: "Invalid credentials" });
     }
     const user = userResult.rows[0];
+    
+    // Check if user is verified or if we're in development mode
     if (!user.is_verified) {
-      return res
-        .status(403)
-        .json({ message: "Please verify your email first." });
+      // In development, allow login even if not verified
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('🔧 Development mode: Allowing unverified user login');
+        // Auto-verify the user
+        await db.query(
+          "UPDATE users SET is_verified = TRUE WHERE id = $1",
+          [user.id]
+        );
+        user.is_verified = true; // Update local object
+      } else {
+        return res
+          .status(403)
+          .json({ message: "Please verify your email first." });
+      }
     }
     // Check password using password_hash column or fallback to password column
     const passwordToCheck = user.password_hash || user.password;

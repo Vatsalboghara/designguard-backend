@@ -106,7 +106,12 @@ app.use((err, req, res, next) => {
     next();
 });
 
+
 const PORT = process.env.PORT || 5000;
+
+app.get("/",(req,res)=>{
+  res.send("API is running....");
+});
 
 server.listen(PORT, () => {
     console.log(`🚀 Server started on port ${PORT}`);

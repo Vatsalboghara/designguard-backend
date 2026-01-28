@@ -2,12 +2,30 @@ require('dotenv').config();
 const nodemailer = require('nodemailer');
 
 const transporter = nodemailer.createTransport({
-    service: 'gmail', // Assuming Gmail based on usage of likely Gmail app password
+    service: 'gmail',
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
     },
 });
+
+// Test email configuration on startup
+const testEmailConfig = async () => {
+    try {
+        if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+            throw new Error('Email credentials not configured');
+        }
+        await transporter.verify();
+        console.log('✅ Email service is ready');
+        return true;
+    } catch (error) {
+        console.error('❌ Email service configuration error:', error.message);
+        return false;
+    }
+};
+
+// Call test on module load
+testEmailConfig();
 
 const sendOTP = async (email, otp) => {
     const mailOptions = {
