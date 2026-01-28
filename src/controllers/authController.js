@@ -80,11 +80,11 @@ exports.register = async (req, res) => {
       console.log(`✅ OTP sent to ${email}`);
     } catch (emailError) {
       console.error('❌ Email failed:', emailError.message);
-      return res.status(201).json({
-        message: "User registered via Fallback. Email failed.",
-        userId,
-        TESTING_OTP: otp_code 
-      });
+      // return res.status(201).json({
+      //   message: "User registered via Fallback. Email failed.",
+      //   userId,
+      //   TESTING_OTP: otp_code 
+      // });
     }
 
     res.status(201).json({ message: "Registered successfully", userId });
