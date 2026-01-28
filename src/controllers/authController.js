@@ -1,186 +1,178 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const db = require("../config/db");
 const { sendOTP, sendPasswordReset } = require("../utils/emailService");
 
-//6-digit otp generator
-const generateOTP = () => Math.floor(1000 + Math.random() * 900000).toString();
+// ✅ Always 6-digit OTP
+const generateOTP = () =>
+  Math.floor(100000 + Math.random() * 900000).toString();
 
-//register
+// ✅ Hash OTP
+const hashOTP = (otp) =>
+  crypto.createHash("sha256").update(otp).digest("hex");
+
+// ================= REGISTER =================
 exports.register = async (req, res) => {
   const client = await db.pool.connect();
+
   try {
     const {
       full_name, email, password, mobile_number, role,
-      company_name, gst_number, factory_address, logo_url, // factory
-      vepari_brand_name, city, vepari_gst_number, // vepari
+      company_name, gst_number, factory_address, logo_url,
+      vepari_brand_name, city, vepari_gst_number,
     } = req.body;
 
-    // 1. Check user exists (No changes needed here)
     const userCheck = await client.query(
-      "SELECT * FROM users WHERE email = $1 or mobile_number = $2",
+      "SELECT id FROM users WHERE email = $1 OR mobile_number = $2",
       [email, mobile_number]
     );
+
     if (userCheck.rows.length > 0) {
       return res.status(400).json({ message: "User already exists." });
     }
 
-    const salt = await bcrypt.genSalt(10);
-    const password_hash = await bcrypt.hash(password, salt);
-    const otp_code = generateOTP();
+    const password_hash = await bcrypt.hash(password, 10);
+
+    const otp = generateOTP();
+    const otp_hash = hashOTP(otp);
     const otp_expires_at = new Date(Date.now() + 10 * 60 * 1000);
 
-    // 2. Start Transaction
     await client.query("BEGIN");
 
-    let userId;
-    let queryParams = [full_name, email, password_hash, mobile_number, role, otp_code, otp_expires_at];
+    const insertUserQuery = `
+      INSERT INTO users
+      (full_name, email, password_hash, mobile_number, role, otp_code, otp_expires_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      RETURNING id
+    `;
 
-    try {
-      await client.query("SAVEPOINT my_savepoint");
+    const userResult = await client.query(insertUserQuery, [
+      full_name,
+      email,
+      password_hash,
+      mobile_number,
+      role,
+      otp_hash,
+      otp_expires_at,
+    ]);
 
-      const insertUserQuery = `INSERT INTO users (full_name, email, password_hash, mobile_number, role, otp_code, otp_expires_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`;
+    const userId = userResult.rows[0].id;
 
-      const userResult = await client.query(insertUserQuery, queryParams);
-      userId = userResult.rows[0].id;
-
-    } catch (err) {
-      await client.query("ROLLBACK TO SAVEPOINT my_savepoint");
-
-      if (err.code === '42703') { // Column not found error
-        console.log('password_hash column not found, falling back to password column');
-        
-        const fallbackQuery = `INSERT INTO users (full_name, email, password, mobile_number, role, otp_code, otp_expires_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`;
-            
-        const userResult = await client.query(fallbackQuery, queryParams);
-        userId = userResult.rows[0].id;
-      } else {
-        throw err; 
-      }
+    if (role === "factory_owner") {
+      await client.query(
+        `INSERT INTO factory_profiles
+         (user_id, company_name, gst_number, factory_address, logo_url)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [userId, company_name, gst_number, factory_address, logo_url]
+      );
     }
 
-    // 3. Insert specific profiles
-    if (role === "factory_owner") {
-       if (!company_name) throw new Error("Company Name required");
-       const insertFactoryQuery = `INSERT INTO factory_profiles (user_id, company_name, gst_number, factory_address, logo_url) VALUES ($1, $2, $3, $4, $5)`;
-       await client.query(insertFactoryQuery, [userId, company_name, gst_number, factory_address, logo_url]);
-    } else if (role === "vepari") {
-       if (!vepari_brand_name || !city) throw new Error("Brand/City required");
-       const insertVepariQuery = `INSERT INTO vepari_profiles (user_id, vepari_brand_name, city, vepari_gst_number, logo_url) VALUES ($1, $2, $3, $4, $5)`;
-       await client.query(insertVepariQuery, [userId, vepari_brand_name, city, vepari_gst_number, logo_url]);
+    if (role === "vepari") {
+      await client.query(
+        `INSERT INTO vepari_profiles
+         (user_id, vepari_brand_name, city, vepari_gst_number, logo_url)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [userId, vepari_brand_name, city, vepari_gst_number, logo_url]
+      );
     }
 
     await client.query("COMMIT");
 
-    // 4. Email Handling (Keep outside transaction logic to avoid blocking DB)
-    try {
-      await sendOTP(email, otp_code);
-      console.log(`✅ OTP sent to ${email}`);
-    } catch (emailError) {
-      console.error('❌ Email failed:', emailError.message);
-      // return res.status(201).json({
-      //   message: "User registered via Fallback. Email failed.",
-      //   userId,
-      //   TESTING_OTP: otp_code 
-      // });
-    }
+    // 📧 Send OTP AFTER commit
+    await sendOTP(email, otp);
 
-    res.status(201).json({ message: "Registered successfully", userId });
+    res.status(201).json({
+      message: "Registered successfully. OTP sent to email.",
+      userId,
+    });
 
   } catch (error) {
-    await client.query("ROLLBACK"); // મેઈન રોલબેક
+    await client.query("ROLLBACK");
     console.error(error);
-    res.status(500).json({ message: "Server Error", error: error.message });
+    res.status(500).json({ message: "Server Error" });
   } finally {
     client.release();
   }
 };
 
-//otp verification
+// ================= VERIFY OTP =================
 exports.verifyOTP = async (req, res) => {
   try {
     const { email, otp } = req.body;
-    const userResult = await db.query("SELECT * FROM users WHERE email = $1", [
-      email,
-    ]);
-    if (userResult.rows.length === 0) {
+
+    const result = await db.query(
+      "SELECT id, otp_code, otp_expires_at, is_verified FROM users WHERE email = $1",
+      [email]
+    );
+
+    if (!result.rows.length) {
       return res.status(404).json({ message: "User not found" });
     }
-    const user = userResult.rows[0];
+
+    const user = result.rows[0];
+
     if (user.is_verified) {
       return res.status(400).json({ message: "User already verified" });
     }
-    if (user.otp_code !== otp) {
+
+    if (new Date() > new Date(user.otp_expires_at)) {
+      return res.status(400).json({ message: "OTP expired" });
+    }
+
+    const hashedOTP = hashOTP(otp);
+
+    if (hashedOTP !== user.otp_code) {
       return res.status(400).json({ message: "Invalid OTP" });
     }
-    if (new Date() > new Date(user.otp_expires_at)) {
-      return res.status(400).json({ message: "OTP Expired" });
-    }
-    // Verify User
+
     await db.query(
-      "UPDATE users SET is_verified = TRUE, otp_code = NULL, otp_expires_at = NULL WHERE id = $1",
-      [user.id],
+      `UPDATE users
+       SET is_verified = TRUE, otp_code = NULL, otp_expires_at = NULL
+       WHERE id = $1`,
+      [user.id]
     );
-    res
-      .status(200)
-      .json({ message: "Email verified successfully. You can now login." });
+
+    res.json({ message: "Email verified successfully" });
+
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server Error" });
   }
 };
 
-//login
+// ================= LOGIN =================
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const userResult = await db.query("SELECT * FROM users WHERE email = $1", [
-      email,
-    ]);
-    if (userResult.rows.length === 0) {
+
+    const result = await db.query(
+      "SELECT * FROM users WHERE email = $1",
+      [email]
+    );
+
+    if (!result.rows.length) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
-    const user = userResult.rows[0];
-    
-    // Check if user is verified or if we're in development mode
+
+    const user = result.rows[0];
+
     if (!user.is_verified) {
-      // In development, allow login even if not verified
-      if (process.env.NODE_ENV !== 'production') {
-        console.log('🔧 Development mode: Allowing unverified user login');
-        // Auto-verify the user
-        await db.query(
-          "UPDATE users SET is_verified = TRUE WHERE id = $1",
-          [user.id]
-        );
-        user.is_verified = true; // Update local object
-      } else {
-        return res
-          .status(403)
-          .json({ message: "Please verify your email first." });
-      }
+      return res.status(403).json({ message: "Verify email first" });
     }
-    // Check password using password_hash column or fallback to password column
-    const passwordToCheck = user.password_hash || user.password;
-    if (!passwordToCheck) {
-      return res.status(500).json({ message: "Password data not found" });
-    }
-    
-    const isMatch = await bcrypt.compare(password, passwordToCheck);
+
+    const isMatch = await bcrypt.compare(password, user.password_hash);
+
     if (!isMatch) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
-    // Create Token
-    const payload = {
-      user: {
-        id: user.id,
-        role: user.role,
-      },
-    };
-    const token = jwt.sign(payload, process.env.JWT_SECRET, {
-      expiresIn: "7d",
-    });
+
+    const token = jwt.sign(
+      { user: { id: user.id, role: user.role } },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
     res.json({
       token,
       user: {
@@ -190,82 +182,63 @@ exports.login = async (req, res) => {
         role: user.role,
       },
     });
+
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server Error" });
   }
 };
 
-//forgot password
+// ================= FORGOT PASSWORD =================
 exports.forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
-    const userResult = await db.query("SELECT * FROM users WHERE email = $1", [
-      email,
-    ]);
-    if (userResult.rows.length === 0) {
+
+    const result = await db.query(
+      "SELECT id FROM users WHERE email = $1",
+      [email]
+    );
+
+    if (!result.rows.length) {
       return res.status(404).json({ message: "User not found" });
     }
-    const user = userResult.rows[0];
-    const payload = {
-      user: {
-        id: user.id,
-      },
-    };
-    const resetToken = jwt.sign(payload, process.env.JWT_SECRET, {
-      expiresIn: "1h",
-    });
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-    const resetLink = `${frontendUrl}/reset-password/${resetToken}`;
+
+    const token = jwt.sign(
+      { user: { id: result.rows[0].id } },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+
+    const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
+
     await sendPasswordReset(email, resetLink);
-    res.status(200).json({ message: "Password reset link sent to email." });
+
+    res.json({ message: "Password reset link sent" });
+
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server Error" });
   }
 };
 
-//reset password
+// ================= RESET PASSWORD =================
 exports.resetPassword = async (req, res) => {
   try {
     const { token, newPassword } = req.body;
-    if (!token || !newPassword) {
-      return res
-        .status(400)
-        .json({ message: "Token and new password are required." });
-    }
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const userId = decoded.user.id;
-      const salt = await bcrypt.genSalt(10);
-      const password_hash = await bcrypt.hash(newPassword, salt);
-      
-      // Try to update password_hash column, fallback to password column
-      try {
-        await db.query("UPDATE users SET password_hash = $1 WHERE id = $2", [
-          password_hash,
-          userId,
-        ]);
-      } catch (err) {
-        // If password_hash column doesn't exist, try password column
-        if (err.code === '42703') {
-          await db.query("UPDATE users SET password = $1 WHERE id = $2", [
-            password_hash,
-            userId,
-          ]);
-        } else {
-          throw err;
-        }
-      }
-      
-      res
-        .status(200)
-        .json({ message: "Password has been reset successfully." });
-    } catch (err) {
-      return res.status(400).json({ message: "Invalid or expired token." });
-    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    const password_hash = await bcrypt.hash(newPassword, 10);
+
+    await db.query(
+      "UPDATE users SET password_hash = $1 WHERE id = $2",
+      [password_hash, decoded.user.id]
+    );
+
+    res.json({ message: "Password reset successful" });
+
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: "Server Error" });
+    res.status(400).json({ message: "Invalid or expired token" });
   }
 };
