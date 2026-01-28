@@ -37,7 +37,6 @@ exports.register = async (req, res) => {
     let queryParams = [full_name, email, password_hash, mobile_number, role, otp_code, otp_expires_at];
 
     try {
-      // ✅ SAVEPOINT બનાવો: જો નીચેની ક્વેરી ફેલ થાય તો આપણે અહીં પાછા આવી શકીશું
       await client.query("SAVEPOINT my_savepoint");
 
       const insertUserQuery = `INSERT INTO users (full_name, email, password_hash, mobile_number, role, otp_code, otp_expires_at)
@@ -47,7 +46,6 @@ exports.register = async (req, res) => {
       userId = userResult.rows[0].id;
 
     } catch (err) {
-      // ✅ જો એરર આવે, તો પહેલા SAVEPOINT પર પાછા જાઓ જેથી ટ્રાન્ઝેક્શન જીવંત રહે
       await client.query("ROLLBACK TO SAVEPOINT my_savepoint");
 
       if (err.code === '42703') { // Column not found error
@@ -56,11 +54,10 @@ exports.register = async (req, res) => {
         const fallbackQuery = `INSERT INTO users (full_name, email, password, mobile_number, role, otp_code, otp_expires_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`;
             
-        // હવે ક્વેરી ચાલશે કારણ કે આપણે રોલબેક કર્યું છે
         const userResult = await client.query(fallbackQuery, queryParams);
         userId = userResult.rows[0].id;
       } else {
-        throw err; // બીજી કોઈ એરર હોય તો બહાર ફેંકો
+        throw err; 
       }
     }
 
@@ -83,7 +80,11 @@ exports.register = async (req, res) => {
       console.log(`✅ OTP sent to ${email}`);
     } catch (emailError) {
       console.error('❌ Email failed:', emailError.message);
-      // જો ઈમેલ ફેલ થાય તો પણ યુઝર બની ગયો છે, તમે તેને ઓટો-વેરીફાય કરી શકો છો (જેમ તમે લખ્યું છે)
+      return res.status(201).json({
+        message: "User registered via Fallback. Email failed.",
+        userId,
+        TESTING_OTP: otp_code 
+      });
     }
 
     res.status(201).json({ message: "Registered successfully", userId });
