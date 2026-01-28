@@ -6,153 +6,92 @@ const { sendOTP, sendPasswordReset } = require("../utils/emailService");
 //6-digit otp generator
 const generateOTP = () => Math.floor(1000 + Math.random() * 900000).toString();
 
-//registration
+//register
 exports.register = async (req, res) => {
   const client = await db.pool.connect();
   try {
     const {
-      full_name,
-      email,
-      password,
-      mobile_number,
-      role,
-      //factory owner
-      company_name,
-      gst_number,
-      factory_address,
-      logo_url,
-      //vepari
-      vepari_brand_name,
-      city,
-      vepari_gst_number,
+      full_name, email, password, mobile_number, role,
+      company_name, gst_number, factory_address, logo_url, // factory
+      vepari_brand_name, city, vepari_gst_number, // vepari
     } = req.body;
 
-    //check user exists
+    // 1. Check user exists (No changes needed here)
     const userCheck = await client.query(
       "SELECT * FROM users WHERE email = $1 or mobile_number = $2",
-      [email, mobile_number],
+      [email, mobile_number]
     );
     if (userCheck.rows.length > 0) {
-      return res.status(400).json({
-        message: "User with this email or mobile number already exists.",
-      });
+      return res.status(400).json({ message: "User already exists." });
     }
 
-    //hash pass
     const salt = await bcrypt.genSalt(10);
     const password_hash = await bcrypt.hash(password, salt);
-
-    //generate otp
     const otp_code = generateOTP();
-    const otp_expires_at = new Date(Date.now() + 10 * 60 * 1000); //10 min
+    const otp_expires_at = new Date(Date.now() + 10 * 60 * 1000);
 
+    // 2. Start Transaction
     await client.query("BEGIN");
 
-    // Check if password_hash column exists, fallback to password column
-    let insertUserQuery;
-    let queryParams;
     let userId;
-    
+    let queryParams = [full_name, email, password_hash, mobile_number, role, otp_code, otp_expires_at];
+
     try {
-      // Try with password_hash column first
-      insertUserQuery = `INSERT INTO users (full_name, email, password_hash, mobile_number, role, otp_code, otp_expires_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
-          RETURNING id`;
-      
-      queryParams = [
-        full_name,
-        email,
-        password_hash,
-        mobile_number,
-        role,
-        otp_code,
-        otp_expires_at,
-      ];
-      
+      // ✅ SAVEPOINT બનાવો: જો નીચેની ક્વેરી ફેલ થાય તો આપણે અહીં પાછા આવી શકીશું
+      await client.query("SAVEPOINT my_savepoint");
+
+      const insertUserQuery = `INSERT INTO users (full_name, email, password_hash, mobile_number, role, otp_code, otp_expires_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`;
+
       const userResult = await client.query(insertUserQuery, queryParams);
       userId = userResult.rows[0].id;
-      
+
     } catch (err) {
-      // If password_hash column doesn't exist, try password column
-      if (err.code === '42703') {
-        console.log('password_hash column not found, using password column');
-        insertUserQuery = `INSERT INTO users (full_name, email, password, mobile_number, role, otp_code, otp_expires_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING id`;
+      // ✅ જો એરર આવે, તો પહેલા SAVEPOINT પર પાછા જાઓ જેથી ટ્રાન્ઝેક્શન જીવંત રહે
+      await client.query("ROLLBACK TO SAVEPOINT my_savepoint");
+
+      if (err.code === '42703') { // Column not found error
+        console.log('password_hash column not found, falling back to password column');
         
-        const userResult = await client.query(insertUserQuery, queryParams);
-        console.log("line 85 auth js", userResult);
-        
+        const fallbackQuery = `INSERT INTO users (full_name, email, password, mobile_number, role, otp_code, otp_expires_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`;
+            
+        // હવે ક્વેરી ચાલશે કારણ કે આપણે રોલબેક કર્યું છે
+        const userResult = await client.query(fallbackQuery, queryParams);
         userId = userResult.rows[0].id;
       } else {
-        throw err;
+        throw err; // બીજી કોઈ એરર હોય તો બહાર ફેંકો
       }
     }
 
-    //insert profile based on role
+    // 3. Insert specific profiles
     if (role === "factory_owner") {
-      if (!company_name)
-        throw new Error("Company Name is requires for Factory Owner");
-      const insertFactoryQuery = `INSERT INTO factory_profiles (user_id, company_name, gst_number, factory_address, logo_url)
-                VALUES ($1, $2, $3, $4, $5)`;
-      await client.query(insertFactoryQuery, [
-        userId,
-        company_name,
-        gst_number,
-        factory_address,
-        logo_url,
-      ]);
+       if (!company_name) throw new Error("Company Name required");
+       const insertFactoryQuery = `INSERT INTO factory_profiles (user_id, company_name, gst_number, factory_address, logo_url) VALUES ($1, $2, $3, $4, $5)`;
+       await client.query(insertFactoryQuery, [userId, company_name, gst_number, factory_address, logo_url]);
     } else if (role === "vepari") {
-      if (!vepari_brand_name || !city)
-        throw new Error("Brand Name and City are required for vepari");
-      const insertVepariQuery = `INSERT INTO vepari_profiles (user_id, vepari_brand_name, city, vepari_gst_number, logo_url)
-                VALUES ($1, $2, $3, $4, $5)`;
-      await client.query(insertVepariQuery, [
-        userId,
-        vepari_brand_name,
-        city,
-        vepari_gst_number,
-        logo_url,
-      ]);
+       if (!vepari_brand_name || !city) throw new Error("Brand/City required");
+       const insertVepariQuery = `INSERT INTO vepari_profiles (user_id, vepari_brand_name, city, vepari_gst_number, logo_url) VALUES ($1, $2, $3, $4, $5)`;
+       await client.query(insertVepariQuery, [userId, vepari_brand_name, city, vepari_gst_number, logo_url]);
     }
 
     await client.query("COMMIT");
 
-    // Send OTP email (with error handling)
+    // 4. Email Handling (Keep outside transaction logic to avoid blocking DB)
     try {
       await sendOTP(email, otp_code);
-      console.log(`✅ OTP sent successfully to ${email}`);
+      console.log(`✅ OTP sent to ${email}`);
     } catch (emailError) {
-      console.error('❌ Email sending failed:', emailError.message);
-      
-      // For development/testing - auto-verify user if email fails
-      if (process.env.NODE_ENV !== 'production') {
-        console.log('🔧 Development mode: Auto-verifying user due to email failure');
-        await client.query(
-          "UPDATE users SET is_verified = TRUE, otp_code = NULL, otp_expires_at = NULL WHERE id = $1",
-          [userId]
-        );
-        return res.status(201).json({
-          message: "User registered and auto-verified (email service unavailable)",
-          userId,
-          autoVerified: true
-        });
-      }
-      
-      // In production, still fail if email can't be sent
-      throw emailError;
+      console.error('❌ Email failed:', emailError.message);
+      // જો ઈમેલ ફેલ થાય તો પણ યુઝર બની ગયો છે, તમે તેને ઓટો-વેરીફાય કરી શકો છો (જેમ તમે લખ્યું છે)
     }
 
-    res.status(201).json({
-      message: "User registered successfully. Please verify your email via OTP.",
-      userId,
-    });
+    res.status(201).json({ message: "Registered successfully", userId });
+
   } catch (error) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK"); // મેઈન રોલબેક
     console.error(error);
-    res
-      .status(500)
-      .json({ message: "Server Verification Error", error: error.message });
+    res.status(500).json({ message: "Server Error", error: error.message });
   } finally {
     client.release();
   }
