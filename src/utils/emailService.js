@@ -4,7 +4,7 @@ const nodemailer = require('nodemailer');
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
   port: 587,          
-  secure: true,       
+  secure: false,       
   auth: {
     user: "saykokiller45@gmail.com",
     pass: "sggq szoi tzoe xpdo",
@@ -48,6 +48,10 @@ const sendOTP = async (email, otp) => {
     try {
         await transporter.sendMail(mailOptions);
         console.log(`OTP sent to ${email}`);
+        console.log(transporter.auth.EMAIL_USER);
+        console.log(transporter.auth.EMAIL_PASS);
+        
+        
     } catch (error) {
         console.error('Error sending OTP email:', error);
         throw new Error('Failed to send verification email.');
