@@ -1,82 +1,92 @@
-require('dotenv').config();
-const nodemailer = require('nodemailer');
+require("dotenv").config();
+const nodemailer = require("nodemailer");
+const { google } = require("googleapis");
 
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,          
-  secure: false,       
-  auth: {
-    user: "saykokiller45@gmail.com",
-    pass: "sggq szoi tzoe xpdo",
-  },
-  tls: {
-    rejectUnauthorized: false
-  },
-  connectionTimeout: 10000, 
-  greetingTimeout: 5000
+// Create OAuth2 client
+const oAuth2Client = new google.auth.OAuth2(
+  process.env.CLIENT_ID,
+  process.env.CLIENT_SECRET,
+  "http://localhost"
+);
+
+// Set refresh token
+oAuth2Client.setCredentials({
+  refresh_token: process.env.REFRESH_TOKEN,
 });
 
-// Test email configuration on startup
-const testEmailConfig = async () => {
-    try {
-        if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-            throw new Error('Email credentials not configured');
-        }
-        await transporter.verify();
-        console.log('✅ Email service is ready');
-        return true;
-    } catch (error) {
-        console.log(error);
-        
-        console.error('❌ Email service configuration error:', error.message);
-        return false;
-    }
+// Create transporter using Gmail API
+const createTransporter = async () => {
+  const accessToken = await oAuth2Client.getAccessToken();
+
+  return nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      type: "OAuth2",
+      user: process.env.EMAIL_USER,
+      clientId: process.env.CLIENT_ID,
+      clientSecret: process.env.CLIENT_SECRET,
+      refreshToken: process.env.REFRESH_TOKEN,
+      accessToken: accessToken.token,
+    },
+  });
 };
 
-// Call test on module load
-testEmailConfig();
-
+// Send OTP email
 const sendOTP = async (email, otp) => {
-    const mailOptions = {
-        from: process.env.EMAIL_USER,
-        to: email,
-        subject: 'DesignGuard - Verify Your Email',
-        text: `Your Verification Code is: ${otp}. It expires in 10 minutes.`,
-        html: `<h3>Welcome to DesignGuard!</h3><p>Your Verification Code is: <b>${otp}</b></p><p>It expires in 10 minutes.</p>`,
-    };
+  try {
+    const transporter = await createTransporter();
 
-    try {
-        await transporter.sendMail(mailOptions);
-        console.log(`OTP sent to ${email}`);
-        console.log(transporter.auth.EMAIL_USER);
-        console.log(transporter.auth.EMAIL_PASS);
-        
-        
-    } catch (error) {
-        console.error('Error sending OTP email:', error);
-        throw new Error('Failed to send verification email.');
-    }
+    await transporter.sendMail({
+      from: `DesignGuard <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: "DesignGuard - Verify Your Email",
+      html: `
+        <h3>Welcome to DesignGuard!</h3>
+        <p>Your Verification Code is:</p>
+        <h2>${otp}</h2>
+        <p>This code expires in 10 minutes.</p>
+      `,
+    });
+
+    console.log(`✅ OTP sent to ${email}`);
+  } catch (error) {
+    console.error("❌ Error sending OTP:", error);
+    throw new Error("Failed to send verification email");
+  }
 };
 
+// Send password reset email
 const sendPasswordReset = async (email, link) => {
-    const mailOptions = {
-        from: process.env.EMAIL_USER,
-        to: email,
-        subject: 'DesignGuard - Password Reset Request',
-        text: `You requested a password reset. Click the following link to reset your password: ${link}`,
-        html: `<h3>Password Reset Request</h3><p>You requested a password reset. Click the button below to reset your password:</p><a href="${link}" style="padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px;">Reset Password</a><p>If you did not request this, please ignore this email.</p>`,
-    };
+  try {
+    const transporter = await createTransporter();
 
-    try {
-        await transporter.sendMail(mailOptions);
-        console.log(`Password reset link sent to ${email}`);
-    } catch (error) {
-        console.error('Error sending password reset email:', error);
-        throw new Error('Failed to send password reset email.');
-    }
+    await transporter.sendMail({
+      from: `DesignGuard <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: "DesignGuard - Password Reset",
+      html: `
+        <h3>Password Reset Request</h3>
+        <p>Click the button below to reset your password:</p>
+        <a href="${link}" style="
+          padding: 10px 16px;
+          background: #007bff;
+          color: #fff;
+          text-decoration: none;
+          border-radius: 4px;
+          display: inline-block;
+        ">Reset Password</a>
+        <p>If you did not request this, ignore this email.</p>
+      `,
+    });
+
+    console.log(`✅ Password reset email sent to ${email}`);
+  } catch (error) {
+    console.error("❌ Error sending reset email:", error);
+    throw new Error("Failed to send password reset email");
+  }
 };
 
 module.exports = {
-    sendOTP,
-    sendPasswordReset,
+  sendOTP,
+  sendPasswordReset,
 };

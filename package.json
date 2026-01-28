@@ -19,9 +19,11 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "googleapis": "^170.1.0",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.0.2",
     "nodemailer": "^7.0.12",
+    "open": "^11.0.0",
     "pg": "^8.17.2",
     "socket.io": "^4.8.3"
   },
