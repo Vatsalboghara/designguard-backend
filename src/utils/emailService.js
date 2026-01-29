@@ -1,67 +1,88 @@
-require("dotenv").config();
-const { Resend } = require("resend");
+require('dotenv').config();
+const SibApiV3Sdk = require('sib-api-v3-sdk');
 
-// Initialize Resend with your API Key
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Brevo API Config
+const defaultClient = SibApiV3Sdk.ApiClient.instance;
+const apiKey = defaultClient.authentications['api-key'];
+apiKey.apiKey = process.env.BREVO_API_KEY; 
 
-// Send OTP email
+const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
+
+// 1. Send OTP Function
 const sendOTP = async (email, otp) => {
-  try {
-    const data = await resend.emails.send({
-      from: "onboarding@resend.dev", 
-      to: email, 
-      subject: "DesignGuard - Verify Your Email",
-      html: `
-        <div style="font-family: Arial, sans-serif; padding: 20px;">
-            <h3>Welcome to DesignGuard!</h3>
-            <p>Your Verification Code is:</p>
-            <h1 style="color: #4A90E2; letter-spacing: 5px;">${otp}</h1>
-            <p>This code expires in 10 minutes.</p>
-        </div>
-      `,
-    });
+    
+    // Sender Email (Je Brevo ma verify karelo hoi)
+    const sender = {
+        email: 'saykokiller45@gmail.com', 
+        name: 'DesignGuard App' 
+    };
 
-    console.log(`✅ OTP sent via Resend to ${email}:`, data);
-    return data;
-  } catch (error) {
-    console.error("❌ Resend OTP Error:", error);
-    throw new Error("Failed to send verification email");
-  }
+    const receivers = [
+        { email: email } 
+    ];
+
+    try {
+        const sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail();
+        sendSmtpEmail.subject = "DesignGuard - Verify Your Email";
+        sendSmtpEmail.htmlContent = `
+            <html>
+                <body>
+                    <h1>Welcome to DesignGuard</h1>
+                    <p>Your Verification Code is:</p>
+                    <h2 style="color:blue;">${otp}</h2>
+                    <p>Valid for 10 minutes.</p>
+                </body>
+            </html>
+        `;
+        sendSmtpEmail.sender = sender;
+        sendSmtpEmail.to = receivers;
+
+        // API Call (No SMTP Port used)
+        const data = await apiInstance.sendTransacEmail(sendSmtpEmail);
+        console.log('✅ OTP sent via Brevo API to:', email);
+        return data;
+
+    } catch (error) {
+        console.error('❌ Brevo API Error:', error);
+        throw new Error('Failed to send email via Brevo');
+    }
 };
 
-// Send password reset email
+// 2. Send Password Reset Function
 const sendPasswordReset = async (email, link) => {
-  try {
-    const data = await resend.emails.send({
-      from: "onboarding@resend.dev", // ⚠️ MUST be this email for Free Tier
-      to: email,
-      subject: "DesignGuard - Password Reset",
-      html: `
-        <div style="font-family: Arial, sans-serif; padding: 20px;">
-            <h3>Password Reset Request</h3>
-            <p>Click the button below to reset your password:</p>
-            <a href="${link}" style="
-              padding: 10px 16px;
-              background: #007bff;
-              color: #fff;
-              text-decoration: none;
-              border-radius: 4px;
-              display: inline-block;
-            ">Reset Password</a>
-            <p style="margin-top: 20px; font-size: 12px; color: #666;">If you did not request this, please ignore this email.</p>
-        </div>
-      `,
-    });
+    
+    const sender = {
+        email: 'vatsalboghara70@gmail.com', // ⚠️ AHIN TAMARO J EMAIL LAKHJO
+        name: 'DesignGuard App'
+    };
 
-    console.log(`✅ Password reset email sent via Resend to ${email}:`, data);
-    return data;
-  } catch (error) {
-    console.error("❌ Resend Reset Error:", error);
-    throw new Error("Failed to send password reset email");
-  }
+    const receivers = [
+        { email: email }
+    ];
+
+    try {
+        const sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail();
+        sendSmtpEmail.subject = "Reset Your Password";
+        sendSmtpEmail.htmlContent = `
+            <html>
+                <body>
+                    <h1>Password Reset Request</h1>
+                    <p>Click link to reset:</p>
+                    <a href="${link}">Reset Password</a>
+                </body>
+            </html>
+        `;
+        sendSmtpEmail.sender = sender;
+        sendSmtpEmail.to = receivers;
+
+        const data = await apiInstance.sendTransacEmail(sendSmtpEmail);
+        console.log('✅ Reset link sent via Brevo API to:', email);
+        return data;
+
+    } catch (error) {
+        console.error('❌ Brevo API Error:', error);
+        throw new Error('Failed to send email via Brevo');
+    }
 };
 
-module.exports = {
-  sendOTP,
-  sendPasswordReset,
-};
+module.exports = { sendOTP, sendPasswordReset };
